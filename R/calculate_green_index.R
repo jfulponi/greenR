@@ -7,6 +7,8 @@
 #'                 You can use the osmdata package to get the required data.
 #' @param crs_code The EPSG code for the Coordinate Reference System (CRS).
 #' @param D The decay parameter in the decay function, default is 100.
+#' @param parallel Logical. If the function should use more than one core on the processing. Default is TRUE.
+#' @param num_cores Number of cores the function should use to process the data. Default is future::availableCores().
 #' @return A data frame with the green index for each edge.
 #' @export
 #' @examples
@@ -15,7 +17,7 @@
 #' # You can use osmdata package to get this data.
 #' calculate_green_index(osm_data, 2056, D = 100)
 #' }
-calculate_green_index <- function(osm_data, crs_code, D = 100) {
+calculate_green_index <- function(osm_data, crs_code, D = 100, parallel = TRUE, num_cores = future::availableCores()) {
 
   # Extract data from the list
   highways_data <- osm_data$highways
@@ -61,14 +63,28 @@ calculate_green_index <- function(osm_data, crs_code, D = 100) {
     return(decay_function)
   }
 
-  future::plan(future::multisession)
+  # Conditional parallel
 
-  edges <- edges %>%
-    dplyr::mutate(
-      green_index_green_area = purrr::map_dbl(sf::st_geometry(geometry), function(x) sum(purrr::map_dbl(green_areas, ~distance_decay_green_area(x, .x), na.rm = TRUE))),
-      green_index_tree = purrr::map_dbl(sf::st_geometry(geometry), function(x) distance_decay_tree(x, trees))
-    )
+  if (parallel) {
+    future::plan(future::multisession, workers = num_cores)
+  } else {
+    future::plan(future::sequential)
+  }
 
+  if (parallel) {
+    edges <- edges %>%
+      dplyr::mutate(
+        green_index_green_area = future.apply::future_map_dbl(sf::st_geometry(geometry), function(x) sum(purrr::map_dbl(green_areas, ~distance_decay_green_area(x, .x), na.rm = TRUE))),
+        green_index_tree = future.apply::future_map_dbl(sf::st_geometry(geometry), function(x) distance_decay_tree(x, trees))
+      )
+  } else {
+    edges <- edges %>%
+      dplyr::mutate(
+        green_index_green_area = purrr::map_dbl(sf::st_geometry(geometry), function(x) sum(purrr::map_dbl(green_areas, ~distance_decay_green_area(x, .x), na.rm = TRUE))),
+        green_index_tree = purrr::map_dbl(sf::st_geometry(geometry), function(x) distance_decay_tree(x, trees))
+      )
+  }
+                                                
   # Compute normalized green index
   edges <- edges %>%
     dplyr::mutate(
